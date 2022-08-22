@@ -1151,9 +1151,6 @@ static GSM0710_Buffer *gsm0710_buffer_init()
 		buf->readp = buf->data;
 		buf->writep = buf->data;
 		buf->endp = buf->data + GSM0710_BUFFER_SIZE;
-
-		buf->bufferready_signal.value = 0;
-		buf->newdataready_signal.value = 0;
 	}
 	return buf;
 }
