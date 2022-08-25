@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 The Android Open Source Project
+ * Copyright (C) 2022 LineageOS
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,13 +13,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include <errno.h>
 #include <string.h>
+#include <stdlib.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 
-#define LOG_TAG "PowerHAL"
+#define LOG_TAG "MTK PowerHAL"
 #include <utils/Log.h>
 
 #include <hardware/hardware.h>
@@ -28,13 +30,39 @@
 #define MT_RUSH_BOOST_PATH "/proc/hps/rush_boost_enabled"
 #define MT_FPS_UPPER_BOUND_PATH "/d/ged/hal/fps_upper_bound"
 
-
 #define POWER_HINT_POWER_SAVING 0x00000101
 #define POWER_HINT_PERFORMANCE_BOOST 0x00000102
 #define POWER_HINT_BALANCE  0x00000103
 
+int sysfs_write(const char *path, char *s)
+{
+    char buf[80];
+    int len;
+    int ret = 0;
+    int fd = open(path, O_WRONLY);
+
+    if (fd < 0) {
+        strerror_r(errno, buf, sizeof(buf));
+        ALOGE("Error opening %s: %s\n", path, buf);
+        return -1 ;
+    }
+
+    len = write(fd, s, strlen(s));
+    if (len < 0) {
+        strerror_r(errno, buf, sizeof(buf));
+        ALOGE("Error writing to %s: %s\n", path, buf);
+
+        ret = -1;
+    }
+
+    close(fd);
+
+    return ret;
+}
+
 static void power_init(struct power_module *module)
 {
+    ALOGI("MTK power HAL initing.");
 }
 
 static void power_set_interactive(struct power_module *module, int on)
@@ -82,34 +110,76 @@ static void power_hint(struct power_module *module, power_hint_t hint,
         case POWER_HINT_SET_PROFILE:
         case POWER_HINT_VIDEO_ENCODE:
         case POWER_HINT_VIDEO_DECODE:
-        break;
         case POWER_HINT_SUSTAINED_PERFORMANCE:
-            ALOGI("POWER_HINT_SUSTAINED_PERFORMANCE");
-            break;
         case POWER_HINT_VR_MODE:
-            ALOGI("POWER_HINT_VR_MODE");
-            break;
+        break;
     default:
         break;
     }
 }
 
+static void set_feature(struct power_module *module, feature_t feature, int state)
+{
+    switch (feature) {
+#ifdef TAP_TO_WAKE_NODE
+        case POWER_FEATURE_DOUBLE_TAP_TO_WAKE:
+            sysfs_write(TAP_TO_WAKE_NODE, state ? "1" : "0");
+            break;
+#endif
+        default:
+            break;
+    }
+}
+
+static int power_open(const hw_module_t* module, const char* name,
+                    hw_device_t** device)
+{
+    ALOGD("%s: enter; name=%s", __FUNCTION__, name);
+    int retval = 0; /* 0 is ok; -1 is error */
+
+    if (strcmp(name, POWER_HARDWARE_MODULE_ID) == 0) {
+        power_module_t *dev = (power_module_t *)calloc(1,
+                sizeof(power_module_t));
+
+        if (dev) {
+            /* Common hw_device_t fields */
+            dev->common.module_api_version = POWER_MODULE_API_VERSION_0_3;
+            dev->common.tag = HARDWARE_DEVICE_TAG;
+            dev->common.hal_api_version = HARDWARE_HAL_API_VERSION;
+
+            dev->init = power_init;
+            dev->powerHint = power_hint;
+            /* At the moment we support 0.3 APIs */
+            dev->setFeature = set_feature,
+
+            *device = (hw_device_t*)dev;
+        } else
+            retval = -ENOMEM;
+    } else {
+        retval = -EINVAL;
+    }
+
+    ALOGD("%s: exit %d", __FUNCTION__, retval);
+    return retval;
+}
+
 static struct hw_module_methods_t power_module_methods = {
-    .open = NULL,
+    .open = power_open,
 };
 
 struct power_module HAL_MODULE_INFO_SYM = {
     .common = {
         .tag = HARDWARE_MODULE_TAG,
-        .module_api_version = POWER_MODULE_API_VERSION_0_2,
+        .module_api_version = POWER_MODULE_API_VERSION_0_3,
         .hal_api_version = HARDWARE_HAL_API_VERSION,
         .id = POWER_HARDWARE_MODULE_ID,
-        .name = "Power HAL",
-        .author = "The Android Open Source Project",
+        .name = "MTK Power HAL",
+        .author = "LineageOS",
         .methods = &power_module_methods,
     },
 
     .init = power_init,
     .setInteractive = power_set_interactive,
     .powerHint = power_hint,
+    .setFeature = set_feature,
 };
