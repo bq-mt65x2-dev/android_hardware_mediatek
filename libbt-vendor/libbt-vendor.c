@@ -17,14 +17,34 @@
 #define LOG_TAG "libbt_vendor_mtk"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <dlfcn.h>
 #include <utils/Log.h>
 #include <pthread.h>
+#include <time.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <bt_vendor_lib.h>
 #include <bt_hci_bdroid.h>
 #include <hardware/bluetooth.h>
+
+// Keep this struct aligned with libnvram.
+typedef struct ap_nvram_btradio_struct {
+    unsigned char addr[6];            // BT address
+    unsigned char Voice[2];           // Voice setting for SCO connection
+    unsigned char Codec[4];           // PCM codec setting
+    unsigned char Radio[6];           // RF configuration
+    unsigned char Sleep[7];           // Sleep mode configuration
+    unsigned char BtFTR[2];           // Other feature setting
+    unsigned char TxPWOffset[3];      // TX power channel offset compensation
+    unsigned char CoexAdjust[6];      // BT/WIFI coexistence performance adjustment
+    unsigned char Reserved1[2];       // Reserved
+    unsigned char Reserved2[2];       // Reserved
+    unsigned char Reserved3[4];       // Reserved
+    unsigned char Reserved4[4];       // Reserved
+    unsigned char Reserved5[8];       // Reserved
+    unsigned char Reserved6[8];       // Reserved
+} ap_nvram_btradio_struct;
 
 /**
  * TODO: check/fix this value. does this make sense for MTK? It is taken from TI
@@ -89,6 +109,30 @@ int mtk_init(const bt_vendor_callbacks_t* p_cb, unsigned char *local_bdaddr) {
   return 0;
 }
 
+int mtk_gen_new_mac() {
+    unsigned char BtAddr[6];
+    struct ap_nvram_btradio_struct btradioStruct;
+
+    srand(time(NULL) + getpid());
+
+    for (int i = 0; i < 6; i++) {
+        btradioStruct.addr[i] = rand() % 256;
+    }
+
+    // Our BT HAL looks for the MAC address inside
+    // this file.
+    int fd = open("/data/BT_Addr", O_CREAT|O_WRONLY);
+    if (fd < 0) {
+        if (write(fd, &btradioStruct, 1*sizeof(ap_nvram_btradio_struct)) != -1) {
+             return 0;
+        }
+    }
+
+    // We shouldn't be here since that means we were
+    // unable to write the new MAC.
+    return -1;
+}
+
 void mtk_cleanup(void) {
   ALOGI("vendor cleanup");
   bt_vendor_cbacks = NULL;
@@ -103,7 +147,22 @@ int mtk_open(void **param) {
   int fd, idx;
   fd = mtk_bt_enable(0, NULL);
   if (fd < 0) {
-    ALOGE("Can't open mtk fd");
+    // We failed? This usually means there was no MAC
+    // address set at this point. It's okay! Generate
+    // a new one and retry again!
+    ALOGW("bt_enable() failed, not dying yet!");
+    if (mtk_gen_new_mac() < 0) {
+        fd = mtk_bt_enable(0, NULL);
+        // We failed? If the MAC wasn't the problem
+        // there's nothing much we can do. Bail out.
+        if (fd < 0) {
+            ALOGE("Can't open mtk fd");
+            return -1;
+        }
+        ALOGI("Saved you by generating a new MAC!");
+        return 1;
+    }
+    ALOGE("Unable to generate a new MAC");
     return -1;
   }
   for (idx = 0; idx < CH_MAX; idx++)
