@@ -15,9 +15,12 @@
  */
 
 #define LOG_TAG "libbt_vendor_mtk"
+#define BDADDR_PATH "/data/BT_Addr"
 
 #include <stdio.h>
+#include <string.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <dlfcn.h>
 #include <utils/Log.h>
 #include <pthread.h>
@@ -93,6 +96,15 @@ int mtk_init(const bt_vendor_callbacks_t* p_cb, unsigned char *local_bdaddr) {
 
   dlerror();
 
+  if (local_bdaddr == NULL || !memcmp(local_bdaddr, "\0\0\0\0\0\0", 6)) {
+     if (access(BDADDR_PATH, F_OK) != 0) {
+        ALOGI("Trying to generate a new MAC address");
+        if (mtk_gen_new_mac() < 0) {
+           ALOGE("Failed to generate random address, errors will most likely occur!");
+        }
+     }
+  }
+
   mtklib_handle = dlopen("libbluetoothdrv.so", RTLD_LAZY);
   if (! mtklib_handle) {
     ALOGE("Failed to open libbluetoothdrv library");
@@ -147,22 +159,7 @@ int mtk_open(void **param) {
   int fd, idx;
   fd = mtk_bt_enable(0, NULL);
   if (fd < 0) {
-    // We failed? This usually means there was no MAC
-    // address set at this point. It's okay! Generate
-    // a new one and retry again!
-    ALOGW("bt_enable() failed, not dying yet!");
-    if (mtk_gen_new_mac() < 0) {
-        fd = mtk_bt_enable(0, NULL);
-        // We failed? If the MAC wasn't the problem
-        // there's nothing much we can do. Bail out.
-        if (fd < 0) {
-            ALOGE("Can't open mtk fd");
-            return -1;
-        }
-        ALOGI("Saved you by generating a new MAC!");
-        return 1;
-    }
-    ALOGE("Unable to generate a new MAC");
+    ALOGE("mtk_bt_enable failed!");
     return -1;
   }
   for (idx = 0; idx < CH_MAX; idx++)
